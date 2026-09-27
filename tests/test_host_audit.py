@@ -142,11 +142,11 @@ class ProcessAndOutputTests(unittest.TestCase):
         self.assertEqual(host_audit.process_flags("/usr/bin/program (deleted).bak"), [])
 
     def test_clean_escapes_terminal_controls_and_bidi(self):
-        value = "обычный текст\x1b[31m\n\r\t\x00\x7f\u202e\u2066"
+        value = "plain café text\x1b[31m\n\r\t\x00\x7f\u202e\u2066"
         cleaned = host_audit.clean(value)
         self.assertEqual(
             cleaned,
-            "обычный текст\\u001b[31m\\u000a\\u000d\\u0009\\u0000\\u007f\\u202e\\u2066",
+            "plain café text\\u001b[31m\\u000a\\u000d\\u0009\\u0000\\u007f\\u202e\\u2066",
         )
 
     def test_command_output_is_bounded(self):
@@ -156,7 +156,7 @@ class ProcessAndOutputTests(unittest.TestCase):
         )
         self.assertEqual(output, "x" * 128)
         self.assertIsNotNone(reason)
-        self.assertIn("лимит", reason)
+        self.assertIn("limit", reason)
         self.assertIsInstance(code, int)
 
     def test_command_timeout_terminates_process(self):
@@ -168,7 +168,7 @@ class ProcessAndOutputTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
         self.assertEqual(output, "")
         self.assertLess(code, 0)
-        self.assertIn("тайм-аут", reason)
+        self.assertIn("timed out", reason)
 
     def test_command_preserves_exit_status_and_merges_stderr(self):
         output, code, reason = host_audit.run_bounded(
@@ -260,7 +260,7 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(self.audit.total_bytes, 5)
 
     def test_failed_command_output_is_a_gap_not_trusted_inventory(self):
-        for result in (("partial", 0, "тайм-аут команды"), ("error", 1, None)):
+        for result in (("partial", 0, "command timed out"), ("error", 1, None)):
             audit = host_audit.Audit()
             with self.subTest(result=result), mock.patch.object(
                 host_audit, "command_path", return_value="/synthetic/ss"
@@ -315,7 +315,7 @@ class AuditTests(unittest.TestCase):
         ), contextlib.redirect_stderr(io.StringIO()) as output:
             audit_class.return_value.run.return_value = report
             self.assertEqual(host_audit.main(["--output", "synthetic-report"]), 3)
-        self.assertIn("Не удалось записать", output.getvalue())
+        self.assertIn("Could not write", output.getvalue())
 
 
 class SSHJournalTests(unittest.TestCase):

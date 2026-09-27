@@ -4,7 +4,8 @@
 sudo bash /home/n/repos/host-audit/install-autostart.sh
 ```
 
-Проверка будет запускаться через две минуты после каждой загрузки. Каждый JSON сохранится отдельно; последний можно прочитать так:
+The audit runs two minutes after each boot. Each JSON report is saved separately.
+Read the latest report with:
 
 ```bash
 sudo cat /var/lib/host-audit/latest.json

@@ -1,101 +1,108 @@
-# Проверка Linux-хоста
+# Linux Host Audit
 
-`host_audit.py` собирает локальный отчёт о признаках компрометации и настройках,
-которые стоит проверить вручную. Нужны Linux и Python 3.8 или новее; сторонние
-Python-библиотеки не нужны. Для сети используется `ss`, для SSH-журнала —
-`journalctl`, для неудачных входов — `lastb` из util-linux с поддержкой
-`--tab-separated`. Отсутствие утилит и прав доступа отражается в отчёте.
+`host_audit.py` creates a local report of possible signs of compromise and settings
+that warrant manual review. It requires Linux and Python 3.8 or later, with no
+third-party Python libraries. It uses `ss` for network information, `journalctl`
+for SSH logs, and util-linux `lastb` with `--tab-separated` support for failed
+logins. Missing utilities and insufficient permissions are recorded in the report.
 
-Скрипт ищет признаки, а не устанавливает факт взлома. Отсутствие находок **не
-доказывает чистоту хоста**: вредоносный код может скрываться вне области проверки,
-а скомпрометированные ядро, Python, системные утилиты и журналы могут искажать
-результаты. Предупреждения тоже требуют проверки: например, обновление пакета
-может оставить работающий процесс с удалённым исполняемым файлом.
+The script looks for indicators; it does not determine whether a host has been
+compromised. The absence of findings **does not prove that the host is clean**:
+malicious code may be outside the scope of the checks, and a compromised kernel,
+Python interpreter, system utilities, or logs can distort the results. Warnings also
+need review: for example, a package update can leave a process running with a
+deleted executable.
 
-## Запуск
+## Usage
 
-Из каталога проекта:
+From the project directory:
 
 ```bash
-# Отчёт в терминале; root даёт доступ к большему числу проверок.
+# Print a report to the terminal; root access enables more checks.
 sudo python3 -I -B host_audit.py
 
-# Сохранить JSON в новый файл с правами 0600.
+# Save JSON to a new file with mode 0600.
 sudo python3 -I -B host_audit.py --format json --output /root/host-audit.json
 
-# Текстовый отчёт, SSH-журнал за последние 30 дней.
+# Save a text report, including SSH logs from the last 30 days.
 sudo python3 -I -B host_audit.py --days 30 --output /root/host-audit.txt
 ```
 
-Запуск без `sudo` тоже поддерживается, но покрытие будет неполным. Ключ `-I`
-изолирует пути импорта Python от текущего каталога и переменных `PYTHON*`,
-`-B` отключает создание байткода. Существующие файлы отчёта не перезаписываются;
-при повторном запуске укажите новое имя. Символические ссылки в пути отчёта
-отклоняются. Отчёт содержит имена пользователей, пути и IP-адреса — храните его
-с ограниченным доступом.
+Running without `sudo` is also supported, but coverage will be incomplete. The
+`-I` option isolates Python's import paths from the current directory and
+`PYTHON*` environment variables; `-B` disables bytecode generation. Existing
+report files are not overwritten; choose a new name for each run. Symbolic links
+in the output path are rejected. Reports contain usernames, paths, and IP
+addresses, so keep access to them restricted.
 
-## Автозапуск
+## Autostart
 
-Для systemd есть установщик. Запустите из каталога проекта:
+An installer is available for systemd. Run it from the project directory:
 
 ```bash
 sudo bash install-autostart.sh
 ```
 
-Он копирует текущую версию скрипта и обёртку в `/usr/local/lib/host-audit`
-с владельцем root и включает `host-audit.timer`. Проверка запускается от root
-примерно через две минуты после каждой загрузки. Если компьютер уже работает
-дольше двух минут, включение таймера запускает первую проверку сразу.
+It copies the current script and its wrapper to `/usr/local/lib/host-audit`,
+sets their owner to root, and enables `host-audit.timer`. The audit runs as root
+approximately two minutes after each boot. If the computer has already been
+running for more than two minutes, enabling the timer starts the first audit
+immediately.
 
-Каждый JSON сохраняется отдельным файлом в `/var/lib/host-audit/reports`.
-Ссылка `/var/lib/host-audit/latest.json` указывает на последний завершённый отчёт.
-Каталоги имеют права `0700`, файлы — `0600`. История не удаляется автоматически.
-Коды аудита `1` и `2` означают созданный отчёт с находками или пропусками;
-systemd считает такой запуск завершённым успешно. При ошибке или тайм-ауте
-предыдущий `latest.json` сохраняется, незавершённый файл имеет суффикс `.partial`.
+Each JSON report is saved as a separate file in `/var/lib/host-audit/reports`.
+The `/var/lib/host-audit/latest.json` symlink points to the most recent completed
+report. Directories have mode `0700` and files have mode `0600`. Report history
+is not deleted automatically. Audit exit codes `1` and `2` indicate that a report
+was created with findings or gaps; systemd treats these runs as successful. If
+an error or timeout occurs, the previous `latest.json` is retained, and the
+incomplete file has a `.partial` suffix.
 
 ```bash
-# Прочитать последний отчёт.
+# Read the latest report.
 sudo cat /var/lib/host-audit/latest.json
 
-# Запустить проверку сейчас; посмотреть состояние и журнал запуска.
+# Run an audit now; inspect its status and logs.
 sudo systemctl start host-audit.service
 systemctl status host-audit.timer host-audit.service --no-pager
 journalctl -u host-audit.service -n 30 --no-pager
 
-# Отключить автозапуск.
+# Disable autostart.
 sudo systemctl disable --now host-audit.timer
 ```
 
-После изменения скрипта повторите установку, чтобы обновить установленную копию.
-Отчёт отражает состояние на момент запуска; программы, открытые позже, в него
-не попадут. Таймер не выполняет периодические проверки в течение дня.
+After changing the script, run the installer again to update the installed copy.
+A report reflects the state at the time of the audit; programs started later
+will not appear in it. The timer does not run periodic audits throughout the day.
 
-## Что проверяется
+## Checks
 
-- Локальные учётные записи: UID 0 под именем, отличным от `root`, пустые поля
-  паролей в `passwd`/`shadow`. Возможность входа зависит также от PAM, SSH
-  и состояния учётной записи.
-- Владельцы и права важных файлов, домашних каталогов, `.ssh` и стандартных
-  `authorized_keys`. Содержимое ключей и хеши паролей в отчёт не попадают.
-- Процессы: исполняемые файлы в `/tmp`, `/var/tmp`, `/dev/shm`, `memfd` и удалённые
-  исполняемые файлы. Используются метаданные `/proc`; аргументы команд и окружение
-  процессов не собираются.
-- Автозапуск: cron, локальные конфигурации systemd, SysV init, профили shell,
-  пользовательские systemd units и XDG autostart. Файлы перечисляются с правами,
-  временем изменения и SHA-256. Отмечаются ссылки на временные каталоги,
-  загрузка через `curl`/`wget` с передачей в shell и активный `/etc/ld.so.preload`.
-- Сеть: слушающие TCP/UDP-сокеты и установленные TCP-соединения, с PID при
-  наличии прав. Открытый порт сам по себе не считается находкой.
-- SSH-журнал systemd: счётчики неудачных входов и последние успешные входы.
-  Двадцать и более неудач в выборке дают предупреждение о попытках входа,
-  а не вывод об успешной атаке. Сырые строки журнала в отчёт не включаются.
-- Последние 50 неудачных входов из `/var/log/btmp`, включая локальные: имя
-  пользователя, терминал, записанный адрес и время UTC. В JSON они находятся
-  в последнем поле верхнего уровня `recent_failed_logins`, свежие записи первыми.
-  Параметр `--days` этот список не ограничивает; ротированные файлы btmp не читаются.
+- Local accounts: UID 0 under a name other than `root`, and empty password fields
+  in `passwd`/`shadow`. Whether login is possible also depends on PAM, SSH, and
+  account status.
+- Owners and permissions of important files, home directories, `.ssh`, and
+  standard `authorized_keys` files. Key contents and password hashes are not
+  included in the report.
+- Processes: executables in `/tmp`, `/var/tmp`, `/dev/shm`, or `memfd`, and deleted
+  executables. The script uses `/proc` metadata; it does not collect process
+  command-line arguments or environment variables.
+- Autostart: cron, local systemd configuration, SysV init, shell profiles, user
+  systemd units, and XDG autostart. Files are listed with permissions,
+  modification times, and SHA-256 hashes. The script flags references to temporary
+  directories, downloads piped from `curl`/`wget` to a shell, and an active
+  `/etc/ld.so.preload`.
+- Network: listening TCP/UDP sockets and established TCP connections, with PIDs
+  when permissions allow. An open port alone is not treated as a finding.
+- SSH logs from systemd: failed login counts and the most recent successful
+  logins. Twenty or more failures in the sample produce a warning about login
+  attempts, not a conclusion that an attack succeeded. Raw log lines are not
+  included in the report.
+- The last 50 failed logins from `/var/log/btmp`, including local attempts:
+  username, terminal, recorded address, and time in UTC. In JSON, they appear in
+  the final top-level field, `recent_failed_logins`, with the newest entries
+  first. The `--days` option does not limit this list; rotated btmp files are not
+  read.
 
-Пример последнего поля JSON:
+Example of the final JSON field:
 
 ```json
 "recent_failed_logins": {
@@ -114,72 +121,75 @@ sudo systemctl disable --now host-audit.timer
 }
 ```
 
-`has_more: true` означает, что в журнале есть более 50 записей. При отсутствии
-журнала, прав доступа или утилиты будет `status: "unavailable"`, `entries: []`,
-`has_more: null` и пояснение в `error`; это не означает отсутствие попыток.
-Нераспознанный вывод отмечается как `partial`. `0.0.0.0` означает отсутствие
-записанного удалённого адреса и не доказывает происхождение попытки. Собираются
-только события, которые система записывает в btmp — это не все возможные
-ошибки аутентификации. Отметок предыдущего запуска скрипт не сохраняет.
+`has_more: true` means that the log contains more than 50 entries. If the log or
+utility is missing, or access is denied, the result contains
+`status: "unavailable"`, `entries: []`, `has_more: null`, and an explanation in
+`error`; this does not mean there were no attempts. Unrecognized output is marked
+as `partial`. `0.0.0.0` means that no remote address was recorded; it does not
+prove where the attempt originated. Only events that the system records in btmp
+are collected, which does not cover every possible authentication failure. The
+script does not save markers for previous runs.
 
-Поле `recent` означает изменение за период `--days`. Само по себе недавнее
-изменение или наличие файла не является предупреждением. SHA-256 помогает
-сравнить файл с независимо полученной доверенной копией; автоматической проверки
-по эталону в этой версии нет.
+The `recent` field indicates a change within the `--days` period. A recent change
+or the presence of a file alone is not a warning. SHA-256 can help compare a file
+with a trusted copy obtained independently; this version does not automatically
+verify files against a reference.
 
-## Как читать результат
+## Reading the results
 
-В JSON `findings` содержит признаки для ручной проверки: `high` — более серьёзные
-нарушения, `warning` — неоднозначные признаки. Поле `gaps` перечисляет ограничения
-и пропущенные проверки, `inventory` — собранные сведения.
+In JSON, `findings` contains indicators for manual review: `high` indicates more
+serious issues, and `warning` indicates ambiguous signs. The `gaps` field lists
+limitations and skipped checks; `inventory` contains the information collected.
 
-`result` и `coverage` независимы: находки могут присутствовать при неполном
-покрытии. Даже `completed_within_scope` относится только к описанной области
-проверки.
+`result` and `coverage` are independent: findings can be present even when
+coverage is incomplete. Even `completed_within_scope` refers only to the scope
+described here.
 
-| Код завершения | Значение |
+| Exit code | Meaning |
 | --- | --- |
-| `0` | В пределах проверок нет находок и зарегистрированных пропусков; это не гарантия чистоты |
-| `1` | Есть находки для проверки; ограничения смотрите отдельно в `gaps` |
-| `2` | Находок нет, но проверка неполная; также используется при неверных аргументах CLI |
-| `3` | Не удалось записать отчёт |
-| `130` | Проверка прервана пользователем |
+| `0` | No findings or recorded gaps within the scope of the checks; this does not guarantee a clean host |
+| `1` | Findings need review; see `gaps` separately for limitations |
+| `2` | No findings, but coverage is incomplete; also used for invalid CLI arguments |
+| `3` | The report could not be written |
+| `130` | The user interrupted the audit |
 
-Сопоставьте неизвестные UID 0, процессы, успешные SSH-входы, ключи и автозапуск
-с ожидаемой конфигурацией. При серьёзных находках сохраните отчёт и независимые
-журналы; дальнейшую проверку целостности выполняйте с доверенной системы или
-загрузочного носителя. Этот скрипт не выполняет восстановление.
+Compare unfamiliar UID 0 accounts, processes, successful SSH logins, keys, and
+autostart entries with the expected configuration. For serious findings, preserve
+the report and independent logs; perform further integrity checks from a trusted
+system or boot medium. This script does not perform recovery.
 
-## Границы проверки
+## Scope and limits
 
-Чтение файлов ограничено 256 КиБ на файл и общим бюджетом 16 МиБ (не считая
-метаданных процессов и вывода утилит); обход — 2000 объектами и глубиной 6,
-учётные записи — 500, процессы — 20000. Внешняя команда ограничена 15 секундами
-и 1 МиБ вывода. В отчёт попадают до 300 сокетов каждой категории, последние
-1000 записей SSH-журнала и до 50 успешных входов в этой выборке. Достижение
-лимита отражается как неполное покрытие. Лимит времени относится к внешним
-командам; доступ к файловой системе, например зависшему сетевому диску, может
-занять больше времени.
+File reads are limited to 256 KiB per file and a total budget of 16 MiB (excluding
+process metadata and utility output). Traversal is limited to 2,000 objects and
+a depth of 6; accounts are limited to 500 and processes to 20,000. Each external
+command is limited to 15 seconds and 1 MiB of output. Reports include up to 300
+sockets in each category, the last 1,000 SSH log entries, and up to 50 successful
+logins within that sample. Reaching a limit is recorded as incomplete coverage.
+The time limit applies to external commands; filesystem access, such as access
+to an unresponsive network drive, may take longer.
 
-Символические ссылки перечисляются, но скрипт не следует по ним при чтении
-файлов и обходе каталогов. Непроверенные цели отмечаются в `gaps`; обычные ссылки
-systemd также могут давать такие пропуски. Специальные файлы не читаются.
-Проверяемые конфигурации не исполняются. Единственная явная запись — создание
-отчёта через `--output`; обычное чтение файлов и запуск через `sudo` могут
-оставлять системные следы, например atime и записи аудита.
+Symbolic links are listed, but the script does not follow them when reading files
+or traversing directories. Unchecked targets are recorded in `gaps`; ordinary
+systemd symlinks can also cause these gaps. Special files are not read. The
+configurations being checked are not executed. The only explicit write is the
+report created with `--output`; ordinary file reads and running via `sudo` may
+leave system traces, such as atime changes and audit records.
 
-Не проверяются целиком файловая система, память, прошивка, все пакеты,
-библиотеки и поставляемые дистрибутивом systemd units. Не анализируются ACL,
-LDAP/NIS и другие удалённые источники пользователей, текстовые/ротированные
-SSH-журналы. Конфигурация `sshd` не интерпретируется: `Match`, `Include`,
-`AuthorizedKeysCommand` и нестандартные `AuthorizedKeysFile` требуют отдельной
-проверки. В контейнере и при ограничениях `/proc` доступна только часть сведений
-о хосте. Отчёт не заменяет проверку по доверенному эталону и анализ инцидента.
+The script does not comprehensively check the filesystem, memory, firmware, all
+packages, libraries, or systemd units supplied by the distribution. It does not
+analyze ACLs, LDAP/NIS or other remote account sources, or SSH text logs and their
+rotated archives.
+It does not interpret `sshd` configuration: `Match`, `Include`,
+`AuthorizedKeysCommand`, and nonstandard `AuthorizedKeysFile` settings need
+separate review. In a container or with restrictions on `/proc`, only some host
+information is available. The report does not replace verification against a
+trusted reference or incident analysis.
 
-Описание источников данных: [документация ядра о `/proc`](https://www.kernel.org/doc/html/latest/filesystems/proc.html)
-и [документация OpenSSH о путях авторизованных ключей](https://man.openbsd.org/sshd_config#AuthorizedKeysFile).
+Data source documentation: [kernel documentation for `/proc`](https://www.kernel.org/doc/html/latest/filesystems/proc.html)
+and [OpenSSH documentation for authorized key paths](https://man.openbsd.org/sshd_config#AuthorizedKeysFile).
 
-## Тесты
+## Tests
 
 ```bash
 python3 -B -m unittest discover -s tests -v

@@ -70,11 +70,11 @@ class RecentFailedLoginTests(unittest.TestCase):
         self.assertEqual(self.audit.report["findings"], [])
 
     def test_unicode_names_ipv6_and_record_order_are_preserved(self):
-        rows = self.row("пользователь", "ssh:notty", "2001:db8::f", "2026-09-27T12:58:05+00:00")
+        rows = self.row("usér", "ssh:notty", "2001:db8::f", "2026-09-27T12:58:05+00:00")
         rows += self.row("older", "tty2", "192.0.2.10", "2026-08-01T01:02:03+00:00")
         result, _ = self.collect(rows)
         self.assertEqual(result["status"], "ok")
-        self.assertEqual([entry["user"] for entry in result["entries"]], ["пользователь", "older"])
+        self.assertEqual([entry["user"] for entry in result["entries"]], ["usér", "older"])
         self.assertEqual(result["entries"][0]["address"], "2001:db8::f")
         self.assertEqual(result["entries"][0]["terminal"], "ssh:notty")
         self.assertEqual(result["entries"][1]["at"], "2026-08-01T01:02:03+00:00")
@@ -129,7 +129,7 @@ class RecentFailedLoginTests(unittest.TestCase):
                 self.assertTrue(self.audit.report["gaps"])
 
     def test_failed_or_timed_out_command_does_not_trust_partial_entries(self):
-        for code, reason in ((1, None), (-9, "тайм-аут команды"), (-9, "превышен лимит вывода команды")):
+        for code, reason in ((1, None), (-9, "command timed out"), (-9, "command output limit exceeded")):
             with self.subTest(code=code, reason=reason):
                 self.audit = host_audit.Audit()
                 result, _ = self.collect(self.row(), code=code, reason=reason)

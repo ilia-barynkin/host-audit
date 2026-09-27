@@ -30,17 +30,17 @@ MAX_FAILED_LOGINS = 50
 BTMP_PATH = "/var/log/btmp"
 COMMAND_TIMEOUT = 15
 NOTICE = (
-    "Это поиск признаков компрометации, а не доказательство чистоты хоста. "
-    "Настройки и легитимные обновления могут вызывать предупреждения. "
-    "Скомпрометированные ядро, Python, утилиты и журналы могут скрыть следы."
+    "This audit looks for indicators of compromise; it does not prove the host is clean. "
+    "Legitimate configuration and updates can trigger warnings. "
+    "A compromised kernel, Python runtime, utilities, or logs can conceal evidence."
 )
 SCOPE = (
-    "Проверяются локальные учётные записи, видимые процессы и TCP/UDP-сокеты, "
-    "стандартные файлы SSH, выбранные каталоги автозапуска, выборка SSH-журнала "
-    "и последние неудачные входы из btmp. "
-    "Не проверяются память, прошивка, все бинарники/пакеты, ACL, удалённые "
-    "каталоги учётных записей и нестандартные пути SSH/автозапуска. "
-    "В контейнере видна только доступная ему часть системы."
+    "Checks cover local accounts, visible processes and TCP/UDP sockets, "
+    "standard SSH files, selected startup directories, a sample of SSH logs, "
+    "and recent failed logins from btmp. "
+    "Memory, firmware, all binaries/packages, ACLs, remote account directories, "
+    "and nonstandard SSH/startup paths are outside the scope. "
+    "Inside a container, only the accessible portion of the system is visible."
 )
 
 
@@ -64,10 +64,10 @@ def parent_fd(path):
     path = os.fspath(path)
     parts = path.split("/")
     if not path.startswith("/") or ".." in parts:
-        raise ValueError("Требуется абсолютный путь без '..'")
+        raise ValueError("An absolute path without '..' is required")
     parts = [part for part in parts if part and part != "."]
     if not parts:
-        raise ValueError("Путь должен указывать на файл или подкаталог")
+        raise ValueError("The path must refer to a file or subdirectory")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     descriptor = os.open("/", flags)
     try:
@@ -99,7 +99,7 @@ def read_regular(path, limit=MAX_FILE):
         )
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError(errno.EINVAL, "не обычный файл", os.fspath(path))
+            raise OSError(errno.EINVAL, "not a regular file", os.fspath(path))
         chunks = []
         size = 0
         while size <= limit:
@@ -108,7 +108,7 @@ def read_regular(path, limit=MAX_FILE):
                 return b"".join(chunks)
             chunks.append(chunk)
             size += len(chunk)
-        raise OSError(errno.EFBIG, "превышен лимит чтения", os.fspath(path))
+        raise OSError(errno.EFBIG, "file read limit exceeded", os.fspath(path))
     finally:
         os.close(descriptor)
 
@@ -152,22 +152,22 @@ def run_bounded(argv, timeout=COMMAND_TIMEOUT, limit=MAX_COMMAND, pass_fds=()):
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    reason = "тайм-аут команды"
+                    reason = "command timed out"
                     break
                 if not selector.select(remaining):
-                    reason = "тайм-аут команды"
+                    reason = "command timed out"
                     break
                 chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - size))
                 if not chunk:
                     try:
                         process.wait(timeout=max(0.001, deadline - time.monotonic()))
                     except subprocess.TimeoutExpired:
-                        reason = "тайм-аут команды"
+                        reason = "command timed out"
                     break
                 chunks.append(chunk)
                 size += len(chunk)
                 if size > limit:
-                    reason = "превышен лимит вывода команды"
+                    reason = "command output limit exceeded"
                     break
     finally:
         if process.poll() is None or reason:
@@ -193,11 +193,11 @@ def process_flags(executable):
     flags = []
     path = executable[:-10] if executable.endswith(" (deleted)") else executable
     if path.startswith(("/tmp/", "/var/tmp/", "/dev/shm/")):
-        flags.append("исполняемый файл во временном каталоге")
+        flags.append("executable located in a temporary directory")
     if path.startswith(("/memfd:", "memfd:")):
-        flags.append("исполняемый файл в memfd; возможен легитимный загрузчик")
+        flags.append("executable in memfd; a legitimate loader may be responsible")
     if executable.endswith(" (deleted)"):
-        flags.append("исполняемый файл удалён; возможен результат обновления")
+        flags.append("executable deleted; this may be the result of an update")
     return flags
 
 
@@ -246,7 +246,7 @@ class Audit:
 
     def read(self, path, optional=False):
         if self.total_bytes >= MAX_TOTAL:
-            self.gap("files", "Достигнут общий лимит чтения файлов")
+            self.gap("files", "Total file read limit reached")
             return None
         allowance = min(MAX_FILE, MAX_TOTAL - self.total_bytes)
         # Reserve the allowance even on oversized or failed reads: failures must
@@ -258,7 +258,7 @@ class Audit:
             return data
         except FileNotFoundError:
             if not optional:
-                self.gap(str(path), "Файл отсутствует")
+                self.gap(str(path), "File not found")
         except (OSError, ValueError) as error:
             self.gap(str(path), error)
         return None
@@ -269,13 +269,13 @@ class Audit:
             return
         users, malformed = parse_accounts(data)
         if malformed:
-            self.gap("accounts", "Некорректных строк passwd: %d" % malformed)
+            self.gap("accounts", "Malformed passwd entries: %d" % malformed)
         if len(users) > MAX_USERS:
-            self.gap("accounts", "Достигнут лимит учётных записей: %d" % MAX_USERS)
+            self.gap("accounts", "Account limit reached: %d" % MAX_USERS)
         self.users = users[:MAX_USERS]
         for user in self.users:
             if user["uid"] == 0 and user["name"] != "root":
-                self.finding("extra_uid_zero", "high", "Дополнительная учётная запись с UID 0",
+                self.finding("extra_uid_zero", "high", "Additional account with UID 0",
                              user=user["name"])
         shadow = self.read("/etc/shadow")
         empty = {user["name"] for user in self.users if user["empty_password"]}
@@ -286,7 +286,7 @@ class Audit:
                     empty.add(fields[0])
         for name in sorted(empty):
             self.finding("empty_password", "high",
-                         "Пустое поле пароля; возможность входа зависит от PAM/SSH и срока учётной записи",
+                         "Empty password field; login availability depends on PAM/SSH and account expiration",
                          user=name)
         self.report["inventory"]["accounts"] = [
             {key: value for key, value in user.items() if key != "empty_password"}
@@ -297,7 +297,7 @@ class Audit:
         if path in self.visited:
             return None
         if len(self.visited) >= MAX_FILES:
-            self.gap("files", "Достигнут лимит объектов: %d" % MAX_FILES)
+            self.gap("files", "File and directory limit reached: %d" % MAX_FILES)
             return None
         self.visited.add(path)
         try:
@@ -320,21 +320,21 @@ class Audit:
             except OSError as error:
                 self.gap(path, error)
             # systemd enablement and masking use symlinks routinely.
-            self.gap(path, "Символическая ссылка: содержимое цели не проверялось")
+            self.gap(path, "Symbolic link: target contents were not checked")
             return metadata
         item["type"] = "directory" if stat.S_ISDIR(metadata.st_mode) else "file"
         if metadata.st_uid not in owners:
-            self.finding("unexpected_owner", "warning", "Неожиданный владелец важного пути",
+            self.finding("unexpected_owner", "warning", "Unexpected owner of a sensitive path",
                          path=path, uid=metadata.st_uid, expected_uids=list(owners))
         if mode & 0o022:
             self.finding("writable_sensitive_path", "high" if mode & 0o002 else "warning",
-                         "Важный путь доступен для записи группе или остальным пользователям",
+                         "Sensitive path is writable by the group or other users",
                          path=path, mode=item["mode"])
         if private and mode & 0o007:
-            self.finding("exposed_shadow", "high", "Файл паролей доступен остальным пользователям",
+            self.finding("exposed_shadow", "high", "Password file is accessible to other users",
                          path=path, mode=item["mode"])
         if not stat.S_ISDIR(metadata.st_mode) and not stat.S_ISREG(metadata.st_mode):
-            self.gap(path, "Специальный файл: содержимое не читалось")
+            self.gap(path, "Special file: contents were not read")
         if scan and stat.S_ISREG(metadata.st_mode):
             data = self.read(path)
             if data is not None:
@@ -343,18 +343,18 @@ class Audit:
                          if line.strip() and not line.lstrip().startswith(("#", ";"))]
                 if path == "/etc/ld.so.preload" and lines:
                     self.finding("global_preload", "warning",
-                                 "Активен глобальный LD_PRELOAD; проверьте происхождение библиотек",
+                                 "Global LD_PRELOAD is active; verify the origin of the libraries",
                                  path=path)
                 if any(re.search(r"(?:^|[\s=\"'])/(?:tmp|var/tmp|dev/shm)/", line)
                        for line in lines):
                     self.finding("persistence_temp_reference", "warning",
-                                 "В файле доступа/автозапуска есть ссылка на временный каталог; "
-                                 "это может быть рабочий каталог или легитимная настройка",
+                                 "An access/startup file references a temporary directory; "
+                                 "this may be a working directory or a legitimate setting",
                                  path=path)
                 if any(re.search(r"\b(?:curl|wget)\b[^\n]*\|\s*(?:/bin/)?(?:ba)?sh\b", line)
                        for line in lines):
                     self.finding("download_pipe_shell", "warning",
-                                 "В файле доступа/автозапуска есть загрузка с передачей в shell",
+                                 "An access/startup file pipes a download to a shell",
                                  path=path)
         return metadata
 
@@ -363,12 +363,12 @@ class Audit:
         if metadata is None or not stat.S_ISDIR(metadata.st_mode):
             return
         if depth >= 6:
-            self.gap(path, "Достигнут предел глубины обхода")
+            self.gap(path, "Directory traversal depth limit reached")
             return
         try:
             names, truncated = directory_names(path, max(0, MAX_FILES - len(self.visited)))
             if truncated:
-                self.gap(path, "Достигнут лимит объектов каталога")
+                self.gap(path, "Directory entry limit reached")
             for name in names:
                 self.tree(os.path.join(path, name), owners, depth + 1)
         except (OSError, ValueError) as error:
@@ -393,7 +393,7 @@ class Audit:
         for user in self.users:
             home = user["home"]
             if not home.startswith("/") or ".." in home.split("/"):
-                self.gap("home:" + user["name"], "Некорректный домашний каталог")
+                self.gap("home:" + user["name"], "Invalid home directory")
                 continue
             if home in ("/", "/nonexistent", "/dev/null"):
                 continue
@@ -414,7 +414,7 @@ class Audit:
             names, truncated = directory_names("/proc", MAX_PROCESSES + 256)
             pids = [name for name in names if name.isdigit()]
             if truncated or len(pids) > MAX_PROCESSES:
-                self.gap("processes", "Достигнут лимит процессов")
+                self.gap("processes", "Process limit reached")
             for pid in pids[:MAX_PROCESSES]:
                 try:
                     status = read_regular("/proc/%s/status" % pid, 65536).decode("utf-8", "replace")
@@ -432,7 +432,7 @@ class Audit:
                                  "reasons": reasons}
                         suspects.append(entry)
                         self.finding("unusual_process", "warning",
-                                     "Проверьте происхождение исполняемого файла процесса", **entry)
+                                     "Verify the origin of the process executable", **entry)
                 except FileNotFoundError:
                     vanished += 1
                 except PermissionError:
@@ -442,9 +442,9 @@ class Audit:
         except OSError as error:
             self.gap("processes", error)
         if denied:
-            self.gap("processes", "Нет доступа к %d процессам" % denied)
+            self.gap("processes", "Cannot access %d processes" % denied)
         if vanished:
-            self.gap("processes", "%d процессов исчезли или не имеют доступной exe-ссылки" % vanished)
+            self.gap("processes", "%d processes exited or have no accessible exe link" % vanished)
         self.report["inventory"]["processes"] = {
             "checked": checked, "inaccessible": denied, "vanished_or_no_exe": vanished,
             "suspects": suspects,
@@ -453,7 +453,7 @@ class Audit:
     def command(self, name, args):
         executable = command_path(name)
         if executable is None:
-            self.gap(name, "Утилита отсутствует")
+            self.gap(name, "Utility not found")
             return None
         try:
             output, code, reason = run_bounded([executable] + args)
@@ -461,7 +461,7 @@ class Audit:
             self.gap(name, error)
             return None
         if reason or code:
-            self.gap(name, reason or "Код возврата %d" % code)
+            self.gap(name, reason or "Exit code %d" % code)
             return None
         return output
 
@@ -473,7 +473,7 @@ class Audit:
             if output is not None:
                 lines = output.splitlines()
                 if len(lines) > 300:
-                    self.gap("network:" + name, "В отчёт включены только первые 300 сокетов")
+                    self.gap("network:" + name, "Only the first 300 sockets are included in the report")
                 sockets[name] = lines[:300]
         self.report["inventory"]["network"] = sockets
 
@@ -487,9 +487,9 @@ class Audit:
             return
         rows = output.splitlines()
         if not rows:
-            self.gap("ssh_log", "Нет доступных записей sshd в journal; текстовые и ротированные журналы не проверены")
+            self.gap("ssh_log", "No accessible sshd journal entries; text logs and their rotated archives were not checked")
         if len(rows) > MAX_LOGS:
-            self.gap("ssh_log", "Выборка ограничена последними %d записями" % MAX_LOGS)
+            self.gap("ssh_log", "Sample limited to the most recent %d entries" % MAX_LOGS)
         counts = collections.Counter()
         accepted = []
         failures = collections.Counter()
@@ -499,7 +499,7 @@ class Audit:
                 record = json.loads(row)
                 message = record.get("MESSAGE", "")
                 if not isinstance(message, str):
-                    raise ValueError("MESSAGE не является строкой")
+                    raise ValueError("MESSAGE is not a string")
                 parsed += 1
                 success = re.search(r"Accepted (\S+) for (\S+) from (\S+) port \d+", message)
                 failure = re.search(r"Failed \S+ for (?:invalid user )?\S+ from (\S+) port \d+", message)
@@ -514,14 +514,14 @@ class Audit:
                 if "Invalid user " in message:
                     counts["invalid_user"] += 1
             except (ValueError, TypeError, AttributeError):
-                self.gap("ssh_log", "Есть нераспознанные строки журнала")
+                self.gap("ssh_log", "Some journal entries could not be parsed")
         if rows and not parsed:
-            self.gap("ssh_log", "Не удалось прочитать записи журнала")
+            self.gap("ssh_log", "Could not read journal entries")
         if counts["accepted"] > len(accepted):
-            self.gap("ssh_log", "В отчёт включены только последние 50 успешных входов")
+            self.gap("ssh_log", "Only the 50 most recent successful logins are included")
         if counts["failed"] >= 20:
             self.finding("ssh_failed_logins", "warning",
-                         "Много неудачных SSH-входов в выборке; попытки входа не доказывают успешный взлом",
+                         "Many failed SSH logins in the sample; attempts do not prove a successful compromise",
                          count=counts["failed"], top_addresses=failures.most_common(10))
         self.report["inventory"]["ssh_log"] = {
             "source": "journalctl: sshd, sshd-session", "requested_days": self.days,
@@ -534,7 +534,7 @@ class Audit:
         try:
             executable = command_path("lastb")
             if executable is None:
-                raise ValueError("Утилита lastb отсутствует")
+                raise ValueError("The lastb utility was not found")
             # Pass an already opened regular file, avoiding symlink/FIFO races.
             with parent_fd(BTMP_PATH) as (directory, name):
                 descriptor = os.open(
@@ -543,7 +543,7 @@ class Audit:
                 )
             try:
                 if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                    raise ValueError("btmp не является обычным файлом")
+                    raise ValueError("btmp is not a regular file")
                 output, code, reason = run_bounded([
                     executable, "--file", "/proc/self/fd/%d" % descriptor,
                     "--tab-separated", "--time-format", "iso", "--fullnames", "--ip",
@@ -552,7 +552,7 @@ class Audit:
             finally:
                 os.close(descriptor)
             if reason or code:
-                raise ValueError(reason or "lastb завершился с кодом %d; требуется поддержка --tab-separated" % code)
+                raise ValueError(reason or "lastb exited with code %d; support for --tab-separated is required" % code)
         except (OSError, ValueError) as error:
             result["error"] = str(error)
             self.gap("recent_failed_logins", error)
@@ -574,10 +574,10 @@ class Audit:
             fields = [field.strip() for field in row.split("\t")]
             try:
                 if len(fields) != 6 or footer_seen:
-                    raise ValueError("Некорректная строка lastb")
+                    raise ValueError("Invalid lastb entry")
                 timestamp = dt.datetime.fromisoformat(fields[3])
                 if timestamp.tzinfo is None:
-                    raise ValueError("Время без часового пояса")
+                    raise ValueError("Timestamp has no timezone")
                 entries.append({"user": fields[0], "terminal": fields[1] or None,
                                 "address": fields[2], "at": timestamp.isoformat()})
             except ValueError:
@@ -586,13 +586,13 @@ class Audit:
                       has_more=len(entries) > MAX_FAILED_LOGINS)
         if malformed or not footer_seen:
             result.update(status="partial", has_more=None,
-                          error="Неполный или нераспознанный вывод lastb")
+                          error="Incomplete or unrecognized lastb output")
             self.gap("recent_failed_logins", result["error"])
         return result
 
     def run(self):
         if os.geteuid() != 0:
-            self.gap("privileges", "Запущено без root: shadow, чужие процессы и журналы могут быть недоступны")
+            self.gap("privileges", "Running without root: shadow, other users' processes, and logs may be inaccessible")
         for check in (self.accounts, self.persistence, self.processes, self.network, self.ssh_log):
             try:
                 check()
@@ -609,28 +609,28 @@ class Audit:
 
 
 def render_text(report):
-    lines = ["Проверка Linux-хоста: " + clean(report["host"]), report["notice"], report["scope"], "",
-             "Результат: " + ("есть признаки для проверки" if report["findings"] else "признаков не найдено"),
-             "Покрытие: " + ("неполное" if report["gaps"] else "выполнено в пределах описанного объёма"),
-             "Находок: %d; ограничений/пропусков: %d" % (len(report["findings"]), len(report["gaps"]))]
+    lines = ["Linux host audit: " + clean(report["host"]), report["notice"], report["scope"], "",
+             "Result: " + ("indicators require review" if report["findings"] else "no indicators found"),
+             "Coverage: " + ("partial" if report["gaps"] else "completed within the stated scope"),
+             "Findings: %d; limitations/gaps: %d" % (len(report["findings"]), len(report["gaps"]))]
     for item in report["findings"]:
         lines.extend(["", "[%s] %s: %s" % (item["severity"].upper(), item["code"], item["message"]),
                       "  " + clean(json.dumps(item["evidence"], ensure_ascii=False, sort_keys=True))])
     if report["gaps"]:
-        lines.append("\nОграничения и пропуски:")
+        lines.append("\nLimitations and gaps:")
         for gap in report["gaps"]:
             lines.append("- " + clean(gap["check"]) + ": " + clean(gap["detail"]))
-    lines.append("\nСобранные сведения (recent означает недавнее изменение, а не заражение):")
+    lines.append("\nCollected inventory (recent indicates a recent change, not an infection):")
     for name, entries in report["inventory"].items():
         lines.append("\n" + name + ":")
         iterable = entries if isinstance(entries, list) else [entries]
         for entry in iterable:
             lines.append(clean(json.dumps(entry, ensure_ascii=False, sort_keys=True)))
     if "recent_failed_logins" in report:
-        lines.append("\nПоследние неудачные входы (btmp, время UTC):")
+        lines.append("\nRecent failed logins (btmp, UTC):")
         lines.append(clean(json.dumps(report["recent_failed_logins"], ensure_ascii=False)))
-    lines.extend(["", "Сопоставьте находки, входы и автозапуск с ожидаемой конфигурацией.",
-                  "Код завершения: %d" % report["exit_code"]])
+    lines.extend(["", "Compare findings, logins, and startup entries with the expected configuration.",
+                  "Exit code: %d" % report["exit_code"]])
     return "\n".join(lines) + "\n"
 
 
@@ -646,25 +646,25 @@ def write_report(path, text):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog=NOTICE)
-    parser.add_argument("--format", choices=("text", "json"), default="text", help="Формат отчёта")
-    parser.add_argument("--output", metavar="PATH", help="Создать новый файл отчёта с правами 0600")
-    parser.add_argument("--days", type=int, default=7, help="Период SSH-журнала и отметки recent (1–365, по умолчанию 7)")
+    parser.add_argument("--format", choices=("text", "json"), default="text", help="Report format")
+    parser.add_argument("--output", metavar="PATH", help="Create a new report file with mode 0600")
+    parser.add_argument("--days", type=int, default=7, help="Days of SSH logs and recent-change markers (1-365, default: 7)")
     args = parser.parse_args(argv)
     if not sys.platform.startswith("linux"):
-        parser.error("Поддерживается только Linux")
+        parser.error("Only Linux is supported")
     if not 1 <= args.days <= 365:
-        parser.error("--days должен быть от 1 до 365")
+        parser.error("--days must be between 1 and 365")
     report = Audit(args.days).run()
     # ASCII JSON also neutralizes control characters and bidi escapes in terminals.
     output = json.dumps(report, ensure_ascii=True, indent=2) + "\n" if args.format == "json" else render_text(report)
     try:
         if args.output:
             write_report(args.output, output)
-            print("Отчёт сохранён: " + clean(os.path.abspath(args.output)), file=sys.stderr)
+            print("Report saved: " + clean(os.path.abspath(args.output)), file=sys.stderr)
         else:
             sys.stdout.write(output)
     except (OSError, ValueError) as error:
-        print("Не удалось записать отчёт: " + clean(error), file=sys.stderr)
+        print("Could not write report: " + clean(error), file=sys.stderr)
         return 3
     return report["exit_code"]
 
@@ -673,5 +673,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print("Проверка прервана; полного отчёта нет", file=sys.stderr)
+        print("Audit interrupted; no complete report is available", file=sys.stderr)
         sys.exit(130)
