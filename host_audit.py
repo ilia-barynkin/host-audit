@@ -26,6 +26,8 @@ MAX_PROCESSES = 20000
 MAX_USERS = 500
 MAX_COMMAND = 1024 * 1024
 MAX_LOGS = 1000
+MAX_FAILED_LOGINS = 50
+BTMP_PATH = "/var/log/btmp"
 COMMAND_TIMEOUT = 15
 NOTICE = (
     "Это поиск признаков компрометации, а не доказательство чистоты хоста. "
@@ -34,7 +36,8 @@ NOTICE = (
 )
 SCOPE = (
     "Проверяются локальные учётные записи, видимые процессы и TCP/UDP-сокеты, "
-    "стандартные файлы SSH, выбранные каталоги автозапуска и выборка SSH-журнала. "
+    "стандартные файлы SSH, выбранные каталоги автозапуска, выборка SSH-журнала "
+    "и последние неудачные входы из btmp. "
     "Не проверяются память, прошивка, все бинарники/пакеты, ACL, удалённые "
     "каталоги учётных записей и нестандартные пути SSH/автозапуска. "
     "В контейнере видна только доступная ему часть системы."
@@ -128,7 +131,7 @@ def directory_names(path, limit):
         os.close(descriptor)
 
 
-def run_bounded(argv, timeout=COMMAND_TIMEOUT, limit=MAX_COMMAND):
+def run_bounded(argv, timeout=COMMAND_TIMEOUT, limit=MAX_COMMAND, pass_fds=()):
     """Capture bounded output without a shell, pager, inherited PATH or LD_* vars."""
     environment = {
         "PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "TZ": "UTC",
@@ -137,6 +140,7 @@ def run_bounded(argv, timeout=COMMAND_TIMEOUT, limit=MAX_COMMAND):
     process = subprocess.Popen(
         argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, env=environment, start_new_session=True,
+        pass_fds=pass_fds,
     )
     chunks = []
     size = 0
@@ -524,6 +528,68 @@ class Audit:
             "sample_size": parsed, "counts": dict(counts), "recent_accepted": accepted,
         }
 
+    def failed_logins(self):
+        result = {"source": BTMP_PATH, "status": "unavailable",
+                  "limit": MAX_FAILED_LOGINS, "entries": [], "has_more": None}
+        try:
+            executable = command_path("lastb")
+            if executable is None:
+                raise ValueError("Утилита lastb отсутствует")
+            # Pass an already opened regular file, avoiding symlink/FIFO races.
+            with parent_fd(BTMP_PATH) as (directory, name):
+                descriptor = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                    dir_fd=directory,
+                )
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise ValueError("btmp не является обычным файлом")
+                output, code, reason = run_bounded([
+                    executable, "--file", "/proc/self/fd/%d" % descriptor,
+                    "--tab-separated", "--time-format", "iso", "--fullnames", "--ip",
+                    "--limit", str(MAX_FAILED_LOGINS + 1),
+                ], pass_fds=(descriptor,))
+            finally:
+                os.close(descriptor)
+            if reason or code:
+                raise ValueError(reason or "lastb завершился с кодом %d; требуется поддержка --tab-separated" % code)
+        except (OSError, ValueError) as error:
+            result["error"] = str(error)
+            self.gap("recent_failed_logins", error)
+            return result
+
+        entries = []
+        malformed = False
+        footer_seen = False
+        for row in output.splitlines():
+            if not row.strip():
+                continue
+            if row.startswith("%d begins " % descriptor):
+                try:
+                    dt.datetime.fromisoformat(row.split(" begins ", 1)[1].strip())
+                    footer_seen = True
+                    continue
+                except ValueError:
+                    pass
+            fields = [field.strip() for field in row.split("\t")]
+            try:
+                if len(fields) != 6 or footer_seen:
+                    raise ValueError("Некорректная строка lastb")
+                timestamp = dt.datetime.fromisoformat(fields[3])
+                if timestamp.tzinfo is None:
+                    raise ValueError("Время без часового пояса")
+                entries.append({"user": fields[0], "terminal": fields[1] or None,
+                                "address": fields[2], "at": timestamp.isoformat()})
+            except ValueError:
+                malformed = True
+        result.update(status="ok", entries=entries[:MAX_FAILED_LOGINS],
+                      has_more=len(entries) > MAX_FAILED_LOGINS)
+        if malformed or not footer_seen:
+            result.update(status="partial", has_more=None,
+                          error="Неполный или нераспознанный вывод lastb")
+            self.gap("recent_failed_logins", result["error"])
+        return result
+
     def run(self):
         if os.geteuid() != 0:
             self.gap("privileges", "Запущено без root: shadow, чужие процессы и журналы могут быть недоступны")
@@ -532,10 +598,13 @@ class Audit:
                 check()
             except (OSError, ValueError) as error:
                 self.gap(check.__name__, error)
+        recent_failed_logins = self.failed_logins()
         self.report["finished_at"] = utc()
         self.report["coverage"] = "partial" if self.report["gaps"] else "completed_within_scope"
         self.report["result"] = "review_required" if self.report["findings"] else "no_indicators_found"
         self.report["exit_code"] = 1 if self.report["findings"] else (2 if self.report["gaps"] else 0)
+        # Keep this convenient-to-review section at the end of the JSON report.
+        self.report["recent_failed_logins"] = recent_failed_logins
         return self.report
 
 
@@ -557,6 +626,9 @@ def render_text(report):
         iterable = entries if isinstance(entries, list) else [entries]
         for entry in iterable:
             lines.append(clean(json.dumps(entry, ensure_ascii=False, sort_keys=True)))
+    if "recent_failed_logins" in report:
+        lines.append("\nПоследние неудачные входы (btmp, время UTC):")
+        lines.append(clean(json.dumps(report["recent_failed_logins"], ensure_ascii=False)))
     lines.extend(["", "Сопоставьте находки, входы и автозапуск с ожидаемой конфигурацией.",
                   "Код завершения: %d" % report["exit_code"]])
     return "\n".join(lines) + "\n"

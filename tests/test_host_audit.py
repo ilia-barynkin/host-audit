@@ -276,6 +276,10 @@ class AuditTests(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             for name in ("accounts", "persistence", "processes", "network", "ssh_log"):
                 stack.enter_context(mock.patch.object(self.audit, name))
+            stack.enter_context(mock.patch.object(self.audit, "failed_logins", return_value={
+                "source": "/var/log/btmp", "status": "ok", "limit": 50,
+                "entries": [], "has_more": False,
+            }))
             stack.enter_context(mock.patch.object(host_audit.os, "geteuid", return_value=effective_uid))
             return self.audit.run()
 

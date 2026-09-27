@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the host security audit after boot
+
+[Timer]
+OnBootSec=2min
+AccuracySec=10s
+Unit=host-audit.service
+
+[Install]
+WantedBy=timers.target

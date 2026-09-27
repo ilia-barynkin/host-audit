@@ -1,0 +1,18 @@
+[Unit]
+Description=Collect a Linux host security audit report
+After=local-fs.target systemd-journald.service network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -B /usr/local/lib/host-audit/run_audit.py
+SuccessExitStatus=1 2
+TimeoutStartSec=180
+UMask=0077
+StateDirectory=host-audit
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+Nice=10
